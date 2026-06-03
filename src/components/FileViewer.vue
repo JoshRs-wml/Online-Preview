@@ -1,5 +1,5 @@
 <template>
-  <div class="file-viewer">
+  <div class="file-viewer" :style="viewerTransformStyle">
     <!-- 如果是 mock 数据，展示占位图以示意 -->
     <div v-if="isMockUrl" class="mock-placeholder">
       <el-icon class="mock-icon" :size="64"><Document /></el-icon>
@@ -30,8 +30,9 @@
         class="office-viewer"
       />
       
+      <!-- 图片预览 -->
       <div v-else-if="isImage" class="image-viewer">
-        <img :src="file.url" @error="onError" :alt="file.name" />
+        <img :src="file.url" :alt="file.name" />
       </div>
 
       <CustomVideoViewer 
@@ -54,10 +55,8 @@
 
 <script setup>
 import { computed } from 'vue'
-
-// 引入自研解析器
-import CustomDocxViewer from './CustomDocxViewer.vue'
 import CustomExcelViewer from './CustomExcelViewer.vue'
+import CustomDocxViewer from './CustomDocxViewer.vue'
 import CustomPdfViewer from './CustomPdfViewer.vue'
 import CustomVideoViewer from './CustomVideoViewer.vue'
 
@@ -69,10 +68,29 @@ const props = defineProps({
   scale: {
     type: Number,
     default: 1
+  },
+  rotation: {
+    type: Number,
+    default: 0
+  },
+  flipX: {
+    type: Number,
+    default: 1
+  },
+  flipY: {
+    type: Number,
+    default: 1
   }
 })
 
 const emit = defineEmits(['error'])
+
+// 全局形变控制（应用于整个 FileViewer 容器，这样文档、PDF、视频也都能跟着放大缩小了）
+const viewerTransformStyle = computed(() => ({
+  transform: `scale(${props.scale}) rotate(${props.rotation}deg) scaleX(${props.flipX}) scaleY(${props.flipY})`,
+  transformOrigin: 'center center',
+  transition: 'transform 0.2s ease'
+}))
 
 const isImage = computed(() => {
   return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(props.file.type.toLowerCase())

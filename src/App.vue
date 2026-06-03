@@ -3,15 +3,22 @@
     <!-- 顶部工具栏 -->
     <header class="toolbar">
       <div class="file-info" v-if="currentFile">
-        <span class="file-name">{{ currentFile.name }}</span>
-        <el-tag size="small" type="info">{{ currentFile.type }}</el-tag>
-        <span class="file-size">{{ currentFile.sizeStr }}</span>
+        <span class="file-name" v-if="!isCompareMode">{{ currentFile.name }}</span>
+        <span class="file-name" v-else>
+          正在控制: <el-tag type="warning" size="small">视图 {{ activeViewerId }}</el-tag>
+        </span>
+        <el-tag size="small" type="info" v-if="!isCompareMode">{{ currentFile.type }}</el-tag>
       </div>
       <div class="file-info" v-else>
         <span>未选择文件</span>
       </div>
 
       <div class="actions" v-if="currentFile">
+        <!-- 联动操作开关 -->
+        <div class="sync-control mr-4" v-if="isCompareMode">
+          <el-switch v-model="syncMode" active-text="联动操作" inactive-text="独立操作" inline-prompt style="--el-switch-on-color: #13ce66;" />
+        </div>
+
         <!-- 批量导航 -->
         <el-button-group class="mr-4">
           <el-button :icon="ArrowLeft" @click="prevFile" :disabled="!hasPrev" title="上一份" />
@@ -21,7 +28,7 @@
         <!-- 缩放与视图控制 -->
         <el-button-group class="mr-4">
           <el-button :icon="ZoomOut" @click="zoomOut" title="缩小" />
-          <el-button @click="resetZoom" title="重置比例">{{ Math.round(scale * 100) }}%</el-button>
+          <el-button @click="resetZoom" title="重置比例">{{ Math.round(currentViewer.scale * 100) }}%</el-button>
           <el-button :icon="ZoomIn" @click="zoomIn" title="放大" />
         </el-button-group>
 
@@ -53,48 +60,96 @@
             <el-button size="small" type="primary" :icon="Plus">上传</el-button>
           </el-upload>
         </div>
-        <el-menu
-          :default-active="activeIndex"
-          class="file-menu"
-          @select="handleSelect"
-        >
-          <el-menu-item 
-            v-for="(file, index) in fileList" 
+        <ul class="file-menu">
+          <li 
+            v-for="file in fileList" 
             :key="file.id" 
-            :index="index.toString()"
+            class="file-menu-item"
+            :class="{ 
+              'is-active-a': viewers.A.file?.id === file.id,
+              'is-active-b': viewers.B.file?.id === file.id 
+            }"
+            @click="handleSelect(file)"
           >
-            <el-icon><Document /></el-icon>
-            <template #title>
-              <div class="menu-item-content">
-                <span class="name" :title="file.name">{{ file.name }}</span>
-                <el-tag v-if="file.status === 'error'" size="small" type="danger">失败</el-tag>
-              </div>
-            </template>
-          </el-menu-item>
-        </el-menu>
+            <el-icon class="file-icon"><Document /></el-icon>
+            <div class="menu-item-content">
+              <span class="name" :title="file.name">{{ file.name }}</span>
+              <el-tag v-if="file.status === 'error'" size="small" type="danger">失败</el-tag>
+            </div>
+            <!-- 对比按钮 -->
+            <el-button 
+              v-if="viewers.A.file?.id !== file.id && viewers.B.file?.id !== file.id" 
+              size="small" 
+              type="warning" 
+              link 
+              @click.stop="addToCompare(file)"
+              title="加入对比"
+              class="compare-btn"
+            >
+              VS
+            </el-button>
+          </li>
+        </ul>
       </aside>
 
       <!-- 右侧预览区 -->
       <main class="preview-content" ref="previewContainerRef">
-        <div v-if="!currentFile" class="empty-state">
-          <el-empty description="请从左侧选择要预览的文件" />
-        </div>
-        
-        <div v-else-if="currentFile.status === 'error'" class="error-state">
-          <el-result icon="error" title="预览失败" sub-title="该文件可能已损坏或暂不支持在线预览">
-            <template #extra>
-              <el-button type="primary" @click="downloadFile">下载原文件查看</el-button>
-            </template>
-          </el-result>
-        </div>
+        <div class="split-pane" :class="{ 'is-compare': isCompareMode }">
+          
+          <!-- 视图 A -->
+          <div class="viewer-pane" :class="{ 'active-pane': activeViewerId === 'A' }" @click="activeViewerId = 'A'">
+            <div class="pane-header" v-if="isCompareMode">
+              <el-tag type="warning" effect="dark" size="small">视图 A</el-tag>
+              <span class="pane-title">{{ viewers.A.file?.name || '未选择' }}</span>
+            </div>
+            
+            <div v-if="!viewers.A.file" class="empty-state">
+              <el-empty description="请选择文件" />
+            </div>
+            <div v-else-if="viewers.A.file.status === 'error'" class="error-state">
+              <el-result icon="error" title="预览失败" sub-title="文件可能已损坏"></el-result>
+            </div>
+            <div v-else class="viewer-wrapper">
+              <FileViewer 
+                :file="viewers.A.file" 
+                :scale="viewers.A.scale"
+                :rotation="viewers.A.rotation"
+                :flipX="viewers.A.flipX"
+                :flipY="viewers.A.flipY"
+                @error="() => handlePreviewError('A')" 
+              />
+            </div>
+          </div>
 
-        <div v-else class="viewer-wrapper" :style="viewerStyle">
-          <!-- 这里集成具体格式的预览组件 -->
-          <FileViewer 
-            :file="currentFile" 
-            :scale="scale" 
-            @error="handlePreviewError"
-          />
+          <!-- 分割线 -->
+          <div class="split-divider" v-if="isCompareMode"></div>
+
+          <!-- 视图 B -->
+          <div class="viewer-pane" v-if="isCompareMode" :class="{ 'active-pane': activeViewerId === 'B' }" @click="activeViewerId = 'B'">
+            <div class="pane-header">
+              <el-tag type="warning" effect="dark" size="small">视图 B</el-tag>
+              <span class="pane-title">{{ viewers.B.file?.name || '未选择' }}</span>
+              <el-button size="small" type="danger" link @click.stop="closeCompare">关闭对比</el-button>
+            </div>
+            
+            <div v-if="!viewers.B.file" class="empty-state">
+              <el-empty description="请从左侧加入对比" />
+            </div>
+            <div v-else-if="viewers.B.file.status === 'error'" class="error-state">
+              <el-result icon="error" title="预览失败" sub-title="文件可能已损坏"></el-result>
+            </div>
+            <div v-else class="viewer-wrapper">
+              <FileViewer 
+                :file="viewers.B.file" 
+                :scale="viewers.B.scale"
+                :rotation="viewers.B.rotation"
+                :flipX="viewers.B.flipX"
+                :flipY="viewers.B.flipY"
+                @error="() => handlePreviewError('B')" 
+              />
+            </div>
+          </div>
+
         </div>
       </main>
     </div>
@@ -102,7 +157,7 @@
 </template>
 
 <script setup>
-import { ref, computed, shallowRef } from 'vue'
+import { ref, computed } from 'vue'
 import { 
   ArrowLeft, ArrowRight, ZoomIn, ZoomOut, FullScreen, Download, 
   Document, Plus, RefreshLeft, RefreshRight, Switch, Sort 
@@ -120,58 +175,89 @@ const fileList = ref([
   { id: '6', name: '未知格式文件.xyz', type: 'xyz', sizeStr: '10 KB', url: '', status: 'error' }
 ])
 
-const activeIndex = ref('0')
-const currentFile = computed(() => fileList.value[parseInt(activeIndex.value)])
+// 状态管理重构：支持双视图
+const viewers = ref({
+  A: { file: fileList.value[0], scale: 1, rotation: 0, flipX: 1, flipY: 1 },
+  B: { file: null, scale: 1, rotation: 0, flipX: 1, flipY: 1 }
+})
 
-const hasPrev = computed(() => parseInt(activeIndex.value) > 0)
-const hasNext = computed(() => parseInt(activeIndex.value) < fileList.value.length - 1)
+const activeViewerId = ref('A') // 当前正在被工具栏控制的视图
+const isCompareMode = computed(() => !!viewers.value.B.file)
+const syncMode = ref(false) // 是否联动操作
 
-// 缩放控制
-const scale = ref(1)
-const zoomIn = () => { if (scale.value < 3) scale.value += 0.2 }
-const zoomOut = () => { if (scale.value > 0.4) scale.value -= 0.2 }
-const resetZoom = () => { scale.value = 1 }
+const currentViewer = computed(() => viewers.value[activeViewerId.value])
+const currentFile = computed(() => currentViewer.value.file)
 
-// 旋转与翻转控制
-const rotation = ref(0)
-const flipX = ref(1)
-const flipY = ref(1)
+// 导航逻辑
+const hasPrev = computed(() => {
+  if (!currentFile.value) return false
+  const idx = fileList.value.findIndex(f => f.id === currentFile.value.id)
+  return idx > 0
+})
 
-const rotateLeft = () => { rotation.value -= 90 }
-const rotateRight = () => { rotation.value += 90 }
-const flipHorizontal = () => { flipX.value = flipX.value === 1 ? -1 : 1 }
-const flipVertical = () => { flipY.value = flipY.value === 1 ? -1 : 1 }
+const hasNext = computed(() => {
+  if (!currentFile.value) return false
+  const idx = fileList.value.findIndex(f => f.id === currentFile.value.id)
+  return idx > -1 && idx < fileList.value.length - 1
+})
 
-const resetTransform = () => {
-  scale.value = 1
-  rotation.value = 0
-  flipX.value = 1
-  flipY.value = 1
+// 通用形变控制辅助函数
+const applyTransform = (action) => {
+  const targets = syncMode.value && isCompareMode.value ? ['A', 'B'] : [activeViewerId.value]
+  targets.forEach(vid => {
+    action(viewers.value[vid])
+  })
 }
 
-const viewerStyle = computed(() => ({
-  transform: `scale(${scale.value}) rotate(${rotation.value}deg) scaleX(${flipX.value}) scaleY(${flipY.value})`,
-  transformOrigin: 'center center',
-  transition: 'transform 0.2s ease'
-}))
+// 缩放控制
+const zoomIn = () => applyTransform(v => { if (v.scale < 3) v.scale += 0.2 })
+const zoomOut = () => applyTransform(v => { if (v.scale > 0.4) v.scale -= 0.2 })
+const resetZoom = () => applyTransform(v => { v.scale = 1 })
+
+// 旋转与翻转控制
+const rotateLeft = () => applyTransform(v => { v.rotation -= 90 })
+const rotateRight = () => applyTransform(v => { v.rotation += 90 })
+const flipHorizontal = () => applyTransform(v => { v.flipX = v.flipX === 1 ? -1 : 1 })
+const flipVertical = () => applyTransform(v => { v.flipY = v.flipY === 1 ? -1 : 1 })
+
+const resetTransform = (vid) => {
+  viewers.value[vid].scale = 1
+  viewers.value[vid].rotation = 0
+  viewers.value[vid].flipX = 1
+  viewers.value[vid].flipY = 1
+}
+
+
 
 // 切换逻辑
-const handleSelect = (index) => {
-  activeIndex.value = index
-  resetTransform()
+const handleSelect = (file) => {
+  viewers.value[activeViewerId.value].file = file
+  resetTransform(activeViewerId.value)
+}
+
+const addToCompare = (file) => {
+  viewers.value.B.file = file
+  resetTransform('B')
+  activeViewerId.value = 'B'
+}
+
+const closeCompare = () => {
+  viewers.value.B.file = null
+  activeViewerId.value = 'A'
+  syncMode.value = false
 }
 
 const prevFile = () => {
   if (hasPrev.value) {
-    activeIndex.value = (parseInt(activeIndex.value) - 1).toString()
-    resetTransform()
+    const idx = fileList.value.findIndex(f => f.id === currentFile.value.id)
+    handleSelect(fileList.value[idx - 1])
   }
 }
 
 const nextFile = () => {
   if (hasNext.value) {
-    activeIndex.value = (parseInt(activeIndex.value) + 1).toString()
-    resetTransform()
+    const idx = fileList.value.findIndex(f => f.id === currentFile.value.id)
+    handleSelect(fileList.value[idx + 1])
   }
 }
 
@@ -194,8 +280,7 @@ const handleFileChange = (uploadFile) => {
   }
 
   fileList.value.push(newFile)
-  activeIndex.value = (fileList.value.length - 1).toString()
-  resetTransform()
+  handleSelect(newFile)
   ElMessage.success(`文件 ${rawFile.name} 已加入预览队列`)
 }
 
@@ -211,14 +296,15 @@ const toggleFullScreen = () => {
 }
 
 const downloadFile = () => {
-  ElMessage.success(`开始下载: ${currentFile.value.name}`)
-  // 实际项目中这里通过 a 标签或 API 触发下载
+  if (currentFile.value) {
+    ElMessage.success(`开始下载: ${currentFile.value.name}`)
+  }
 }
 
-const handlePreviewError = () => {
-  if (currentFile.value) {
-    currentFile.value.status = 'error'
-    ElMessage.error('文件预览失败')
+const handlePreviewError = (vid) => {
+  if (viewers.value[vid].file) {
+    viewers.value[vid].file.status = 'error'
+    ElMessage.error(`视图 ${vid} 文件预览失败`)
   }
 }
 </script>
@@ -234,12 +320,12 @@ const handlePreviewError = () => {
 .toolbar {
   height: 56px;
   background-color: #fff;
-  border-bottom: 1px solid #dcdfe6;
+  border-bottom: 1px solid #e4e7ed;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 20px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
   z-index: 10;
 }
 
@@ -248,15 +334,15 @@ const handlePreviewError = () => {
   align-items: center;
   gap: 12px;
   font-size: 14px;
+  max-width: 300px;
 }
 
 .file-name {
   font-weight: 600;
   color: #303133;
-}
-
-.file-size {
-  color: #909399;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .actions {
@@ -275,32 +361,80 @@ const handlePreviewError = () => {
 }
 
 .batch-sidebar {
-  width: 260px;
+  width: 280px;
   background-color: #fff;
-  border-right: 1px solid #dcdfe6;
+  border-right: 1px solid #e4e7ed;
   display: flex;
   flex-direction: column;
+  box-shadow: 1px 0 5px rgba(0,0,0,0.02);
+  z-index: 5;
 }
 
 .sidebar-header {
-  padding: 12px 20px;
+  padding: 14px 20px;
   font-weight: 600;
-  color: #606266;
-  border-bottom: 1px solid #ebeef5;
-  background-color: #fafafa;
+  color: #303133;
+  border-bottom: 1px solid #e4e7ed;
+  background-color: #f8f9fa;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 15px;
 }
 
 .file-menu {
+  list-style: none;
+  margin: 0;
+  padding: 8px 0;
   flex: 1;
   overflow-y: auto;
-  border-right: none;
+}
+
+.file-menu-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 20px;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  transition: all 0.2s ease;
+  position: relative;
+  margin: 2px 8px;
+  border-radius: 6px;
+}
+
+.file-menu-item:hover {
+  background-color: #f0f2f5;
+}
+
+.file-menu-item.is-active-a {
+  background-color: #e6f1fc;
+  color: #409eff;
+}
+.file-menu-item.is-active-a .file-icon,
+.file-menu-item.is-active-a .name {
+  color: #409eff;
+  font-weight: 500;
+}
+
+.file-menu-item.is-active-b {
+  background-color: #fdf6ec;
+  color: #e6a23c;
+}
+.file-menu-item.is-active-b .file-icon,
+.file-menu-item.is-active-b .name {
+  color: #e6a23c;
+  font-weight: 500;
+}
+
+.file-icon {
+  margin-right: 10px;
+  color: #909399;
 }
 
 .menu-item-content {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  width: 100%;
+  flex: 1;
   overflow: hidden;
 }
 
@@ -308,17 +442,79 @@ const handlePreviewError = () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
+  font-size: 14px;
+  color: #606266;
   margin-right: 8px;
+}
+
+.compare-btn {
+  display: none;
+}
+.file-menu-item:hover .compare-btn {
+  display: block;
 }
 
 .preview-content {
   flex: 1;
-  overflow: auto;
+  overflow: hidden;
   position: relative;
   background-color: #ebedf0;
+}
+
+.split-pane {
   display: flex;
-  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.viewer-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  transition: box-shadow 0.3s;
+}
+
+.active-pane {
+  box-shadow: inset 0 0 0 2px #e6a23c;
+}
+.active-pane:first-child {
+  box-shadow: inset 0 0 0 2px #409eff;
+}
+
+.pane-header {
+  height: 44px;
+  background-color: #fff;
+  border-bottom: 1px solid #e4e7ed;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 12px;
+  font-size: 14px;
+  z-index: 5;
+}
+
+.pane-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #303133;
+  font-weight: 500;
+}
+
+.split-divider {
+  width: 6px;
+  background-color: #f0f2f5;
+  cursor: col-resize;
+  z-index: 10;
+  border-left: 1px solid #e4e7ed;
+  border-right: 1px solid #e4e7ed;
+  transition: background-color 0.2s;
+}
+.split-divider:hover {
+  background-color: #dcdfe6;
 }
 
 .empty-state, .error-state {
@@ -326,19 +522,19 @@ const handlePreviewError = () => {
 }
 
 .viewer-wrapper {
-  width: 100%;
-  min-height: 100%;
+  flex: 1;
   display: flex;
   justify-content: center;
   padding: 24px;
+  overflow: auto;
 }
 
 /* 隐藏滚动条但保留功能 */
-.preview-content::-webkit-scrollbar {
+.viewer-wrapper::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-.preview-content::-webkit-scrollbar-thumb {
+.viewer-wrapper::-webkit-scrollbar-thumb {
   background-color: #c0c4cc;
   border-radius: 4px;
 }
